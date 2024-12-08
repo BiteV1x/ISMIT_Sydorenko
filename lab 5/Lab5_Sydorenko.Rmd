@@ -1,0 +1,229 @@
+---
+title: "Лабораторна робота №5. Випадок з двома вибірками. Побудова регресійних моделей"
+author: "Сидоренко Андрій КН23-1`"
+date: "`r Sys.Date()`"
+output:
+  # pdf_document:
+  #   highlight: tango
+  #   toc: yes
+  # word_document:
+  #   highlight: tango
+  #   toc: yes
+  html_notebook:
+    toc: yes # генерація змісту документу
+    toc_float: true
+    highlight: tango # Колір підсвічування коду
+fontsize: 12pt # розмір шрифту
+header-includes:
+ \usepackage[T2A]{fontenc}
+ \usepackage[utf8]{inputenc}
+ \usepackage[russian]{babel}
+editor_options: 
+  chunk_output_type: inline
+bibliography: references_lab.bib # им'я файлу з БД бібліографічних посилань
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+__Мета:__ Засвоєння базових принципів, знайомство з інструментами та набуття навичок роботи з декількама вибірками, побудови моделей регресії на основі МНК засобами мови програмування R та колекції пакетів `dplyr`, `ggplot2`. 
+
+
+
+## Приклад виконання індивідуального завдання {#ind}
+
+__Задача__: оцінити залежність `Y`  за показником  `X`
+
+
+__Вивчаєм дані, та перевіряємо якість__
+
+ 
+```{r, include=FALSE}
+# Инсталлируем необходимые пакеты
+x <- c("dplyr","ggplot2", "tidyr", "corrplot", "rio", "PerformanceAnalytics", "FactoMineR", "factoextra", "caret", "GGally", "randomForest")
+if (any(is.na(match(x,installed.packages())))) {
+  install.packages(x)
+  lapply(x, library, character.only = TRUE)
+} else {
+  lapply(x, library, character.only = TRUE)
+}
+```
+
+
+```{r, include=FALSE}
+# Импортируем данные
+y <- c("data/Варианты1-17.xls")
+data <- import(y)
+# View(data)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# Вибираємо стовпці 4 та 29, додаємо стовпець id як перший і виводимо таблицю
+data_subset <- head(data[, c(4, 29)], 10) %>%
+  mutate(id = 1:n()) %>%
+  select(id, everything())  # Переміщаємо стовпець id на перше місце
+
+colnames(data_subset) <- c("id", "X", "Y")
+
+knitr::kable(
+  data_subset,
+  caption = "Таблица исходных данных (столбцы X, Y и id)"
+)
+```
+
+
+__Генерація тестового проекту, створення моделей та їх оцінка__
+
+
+Досліджуємо таблицю багатовимірних вибіркових даних, обчисливши оцінку коефіцієнта кореляції Пірсона та побудувавши кореляційні поля (див.нижче).
+
+```{r}
+# Перейменовуємо стовпці 4 і 29 на "X" та "Y"
+data <- data %>%
+  rename(X = 4, Y = 29)
+data %>%
+  select(X, Y) %>% 
+  cor() %>% 
+  knitr::kable(caption = "Таблица оценок коэффициентов корреляции")
+```
+
+
+```{r}
+data %>%
+  select(X, Y) %>% 
+ggpairs()
+```
+
+```{r, include=FALSE}
+CorrMatrix <- data %>% 
+  select(X, Y) %>% 
+  cor()
+```
+
+
+Що ми бачимо?
+
+1. Відгук `Y` має позитивну кореляцію середнього ступеня з `X`: `r CorrMatrix[1, 2]`
+1. Розподіли незалежних змінних та відгуку мають позитивну асиметрію, про що свідчить наявність правого хвоста.
+1. Дані мають викиди (outliers), які одночасно є впливовими точками (influential points), тобто виключення або включення їх у модель істотно впливає на її параметри.
+
+
+
+
+__Модель лінійної регресії (multiple regression) на основі МНК (Ordinary Least Squares, OLS): $y=\beta_0+\beta_1x_1$__
+
+
+
+Побудуємо модель лінійної регресії для всіх точок. Видно, що точки з номерами $93$ і $94$ не вписуються в загальну картину, тому ми їх виключаємо та проводимо повторну оцінку коефіцієнтів моделі.
+
+
+```{r}
+dataNotFilter <- select(data, X, Y)
+lm.Y <- lm(Y ~ X, data = dataNotFilter)
+summary(lm.Y)
+plot(lm.Y)
+```
+
+Виключити викиди та повторно проводимо побудову моделі регресії.
+ 
+```{r}
+dataFilter <- data_subset %>%
+  filter(id %in% c(93, 94) != TRUE) %>%  # Виключаємо id  93, 94
+  select(X, Y)
+
+lm.Y <- lm(Y ~ X, data = dataFilter)
+summary(lm.Y)
+plot(lm.Y)
+```
+
+Результати регресійного аналізу показують наступне::
+
+1. Регресія має місце з коефіцієнтом детермінації $R^2=$`r summary(lm.Y)$r.squared`. Тобто модель здатна пояснити мінливість відгуку на `r summary(lm.Y)$r.squared*100` $\%$, кажучи простими словами, модель "хороша" на стільки ж відсотків.
+1. Коефіцієнти при `X` є значущим, що говорить про те, що кількість лайків найбільше сильно корелює з відгуком. Значення вільного члена ($b_0$) межі, що натякає необхідність спроби побудувати модель без константи.
+
+```{r}
+lm.MinusConst.Y <- lm(Y ~ X - 1, data = dataFilter)
+summary(lm.MinusConst.Y)
+plot(lm.MinusConst.Y)
+```
+
+
+```{r}
+ggplot(dataFilter,
+       aes(x = Y - 1, y = Y,
+           colour = X)) +
+  labs(title = "Залежність Y от X",
+       x = "Значення X", y = "Значення Y") +
+  geom_point() +
+  stat_smooth(method=lm, se = TRUE, fullrange = TRUE) 
+
+```
+
+
+
+Виходячи з правил "Три сигма", для коригування лінійної моделі доцільно видалення ще однієї точок. $2$.
+  
+
+```{r}
+dataFilterThreeSigma <- data_subset %>%
+  filter(id %in% c(2, 93, 94) != TRUE) %>%  # Виключаємо id 91, 93, 94
+  select(X, Y)
+```
+
+Строїмо модель.
+
+```{r}
+lm.MinusConstThreeSigma.Y <- lm(Y ~ X - 1, data = dataFilterThreeSigma)
+summary(lm.MinusConstThreeSigma.Y)
+# plot(lm.MinusConst.reach)
+```
+
+Строїмо графік.
+
+```{r}
+ggplot(dataFilterThreeSigma,
+       aes(x = X - 1, y = Y,
+           colour = X)) +
+   labs(title = "ЗЗалежність Y от X",
+      x = "Значення X", y = "Значення Y") +
+  geom_point() +
+  stat_smooth(method=lm, se = TRUE, fullrange = TRUE) 
+```
+
+
+
+Що маємо і як із цим працювати?
+
+1. Рівняння моделі: $y=$`r summary(lm.MinusConstThreeSigma.Y)$coefficients[1]` $\cdot x_2$
+Маємо гранично просту і легко інтерпретовану модель: серед двох чисел, 1 більше, в середньому більше на `r floor(summary(lm.MinusConstThreeSigma.Y)$coefficients[1])` .
+
+1. Регресія має місце з коефіцієнтом детермінації $R^2=$`r summary(lm.MinusConstThreeSigma.Y)$r.squared`. Тобто модель здатна пояснити мінливість відгуку на `r summary(lm.MinusConstThreeSigma.Y)$r.squared*100` $\%$, кажучи простими словами, модель "хороша" на стільки ж відсотків.
+1. Сіра зона на графіку показує надійну зону регресії - нижню і верхню $95%$-ю межу прогнозу для середньої кількості X. Рахується вона так: 
+
+
+```{r}
+XNumber <- data.frame(X=c(10, 9.5, 8)) # указываем значения X для вычисления прогноза по Y
+pre <- predict(lm.MinusConstThreeSigma.Y, XNumber, interval="confidence")
+knitr::kable(cbind(XNumber, pre),
+             caption = "Точковий інтервальний прогноз X от Y")
+```
+
+
+__Висновки__
+
+
+1. На підставі представлених статистичних даних побудовано прототип моделі прогнозування Y на підставі X. Ця залежність адекватно описується простою лінійною залежністю і дозволяє зробити точковий та інтервальний прогноз з надійністю $95% (ймовірністю $0,95%$).
+
+1. Доцільно збільшення обсягу вибіркових даних хоча б на порядок для перевірки адекватності та можливого перенавчання отриманої моделі або побудови складніших залежностей.
+
+1. Головний висновок -- у будь-якому випадку перспективи хороші через сильні кореляції між даними.
+
+
+
+
+
+
